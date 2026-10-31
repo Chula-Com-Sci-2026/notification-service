@@ -1,9 +1,38 @@
 import uuid
 
 from sqlalchemy import DateTime, Uuid, func, literal, tuple_, update
+from sqlalchemy.dialects.postgresql import insert
 from sqlmodel import Session, col, select
 
-from app.models import Notification
+from app.models import BuddyEvent, Notification
+
+
+def create_notification_from_event(*, session: Session, event: BuddyEvent) -> bool:
+    """Store the notification an event produces, once per event and runner.
+
+    Args:
+        session (Session): Database session.
+        event (BuddyEvent): The validated event.
+
+    Returns:
+        bool: True if stored, False if a redelivery already stored it.
+    """
+    stored = session.exec(
+        insert(Notification)
+        .values(
+            id=uuid.uuid4(),
+            event_id=event.event_id,
+            recipient_id=event.notification_recipient_id,
+            event_type=event.event_type,
+            category=event.category,
+            payload=event.payload.model_dump(mode="json", by_alias=True),
+            occurred_at=event.occurred_at,
+        )
+        .on_conflict_do_nothing(constraint="uq_notifications_event_recipient")
+        .returning(col(Notification.id))
+    ).first()
+    session.commit()
+    return stored is not None
 
 
 def list_notifications(

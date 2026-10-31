@@ -1,12 +1,95 @@
 import uuid
 from datetime import datetime
-from typing import Any, Self
+from typing import Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import AwareDatetime, BaseModel, ConfigDict, model_validator
 from pydantic.alias_generators import to_camel
 from sqlalchemy import DateTime, Index, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
+
+EVENT_CATEGORIES = {
+    "BuddyRequestSent": "buddy_requests",
+    "BuddyRequestAnswered": "buddy_requests",
+}
+
+
+class EventModel(BaseModel):
+    """Base for broker messages, which must use the contract's camelCase."""
+
+    model_config = ConfigDict(alias_generator=to_camel)
+
+
+class BuddyEventPayload(EventModel):
+    """Payload of a buddy event, version 1.
+
+    Attributes:
+        request_id: The buddy request.
+        sender_id: Runner who sent the request.
+        recipient_id: Runner the request was sent to.
+        status: Request status after this event.
+    """
+
+    request_id: uuid.UUID
+    sender_id: uuid.UUID
+    recipient_id: uuid.UUID
+    status: Literal["pending", "accepted", "rejected"]
+
+
+class BuddyEvent(EventModel):
+    """Buddy event envelope, version 1, from `buddy-events.schema.json`.
+
+    Attributes:
+        event_id: Unique ID, stable across redeliveries.
+        event_type: What happened, which is also the routing key.
+        version: Envelope version.
+        occurred_at: When it happened.
+        correlation_id: ID that ties this event to the originating request.
+        payload: Details of the buddy request.
+    """
+
+    event_id: uuid.UUID
+    event_type: Literal["BuddyRequestSent", "BuddyRequestAnswered"]
+    version: Literal[1]
+    occurred_at: AwareDatetime
+    correlation_id: uuid.UUID
+    payload: BuddyEventPayload
+
+    @model_validator(mode="after")
+    def _status_fits_event_type(self) -> Self:
+        allowed = (
+            ("pending",)
+            if self.event_type == "BuddyRequestSent"
+            else ("accepted", "rejected")
+        )
+        if self.payload.status not in allowed:
+            raise ValueError(
+                f"{self.event_type} cannot have status {self.payload.status}"
+            )
+        return self
+
+    @property
+    def notification_recipient_id(self) -> uuid.UUID:
+        """Return the runner to notify.
+
+        A sent request goes to its recipient. An answer goes back to the
+        original sender, because `recipientId` is the person who answered.
+
+        Returns:
+            uuid.UUID: The runner who should see this notification.
+        """
+        if self.event_type == "BuddyRequestSent":
+            return self.payload.recipient_id
+        return self.payload.sender_id
+
+    @property
+    def category(self) -> str:
+        """Return the category a runner can turn off for this event.
+
+        Returns:
+            str: The notification category.
+        """
+        return EVENT_CATEGORIES[self.event_type]
 
 
 class Notification(SQLModel, table=True):
@@ -18,8 +101,8 @@ class Notification(SQLModel, table=True):
         recipient_id: Runner who owns this notification.
         event_type: `eventType` from the event envelope.
         category: Category the runner can turn off (FR-9.2).
-        payload: Event payload as published, so a new event type needs no
-            schema change.
+        payload: Contract fields of the event payload, so a new event type
+            needs no schema change.
         occurred_at: `occurredAt` from the event envelope.
         read_at: When the runner first read it, or None while unread.
     """
@@ -71,7 +154,7 @@ class NotificationPublic(CamelModel):
         id: Notification ID.
         type: Event type, such as `BuddyRequestSent`.
         category: Category the runner can turn off.
-        data: Event payload as published.
+        data: Contract fields of the event payload.
         occurred_at: When the event happened.
         read_at: When the runner first read it, or None while unread.
     """

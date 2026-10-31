@@ -9,15 +9,19 @@ from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.main import api_router, root_router
+from app.api.middleware import CorrelationIdMiddleware
 from app.core.config import settings
+from app.core.logs import configure_logging, one_line
 from app.models import ApiError
 
+configure_logging()
 logger = logging.getLogger(__name__)
 
 if settings.SENTRY_DSN and settings.ENVIRONMENT != "local":
     sentry_sdk.init(dsn=str(settings.SENTRY_DSN), enable_tracing=True)
 
 app = FastAPI(title=settings.PROJECT_NAME, version="1.0.0")
+app.add_middleware(CorrelationIdMiddleware)
 
 app.include_router(root_router)
 app.include_router(api_router, prefix=settings.API_V1_STR)
@@ -52,7 +56,7 @@ async def database_unavailable(_request: Request, exc: Exception) -> JSONRespons
     Returns:
         JSONResponse: A generic 503 body.
     """
-    logger.error("Database unavailable: %s", exc)
+    logger.error("Database unavailable: %s", one_line(exc))
     code = status.HTTP_503_SERVICE_UNAVAILABLE
     body = ApiError(
         code=HTTPStatus(code).name, message="Notifications are unavailable right now"

@@ -1,8 +1,9 @@
 import os
 
 # Set before any app import, so the engine binds to a database this suite may
-# drop and tokens are signed with a key that never leaves the tests.
+# drop, the consumer uses its own vhost, and tokens use a test-only key.
 os.environ["POSTGRES_DB"] = "notification_test"
+os.environ["RABBITMQ_VHOST"] = "notification_test"
 os.environ["ACCESS_TOKEN_SECRET"] = "test-only-secret-" + "x" * 64
 
 from collections.abc import Generator  # noqa: E402
@@ -12,8 +13,9 @@ import pytest  # noqa: E402
 from alembic import command  # noqa: E402
 from alembic.config import Config  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
-from sqlmodel import Session  # noqa: E402
+from sqlmodel import Session, create_engine  # noqa: E402
 
+from app.api.deps import get_db  # noqa: E402
 from app.core.config import settings  # noqa: E402
 from app.core.db import engine  # noqa: E402
 from app.main import app  # noqa: E402
@@ -47,3 +49,20 @@ def db() -> Generator[Session]:
 def client() -> Generator[TestClient]:
     with TestClient(app) as c:
         yield c
+
+
+@pytest.fixture
+def database_down() -> Generator[None]:
+    """Route requests to a database nothing is listening on."""
+    dead = create_engine(
+        "postgresql+psycopg://nobody:nothing@127.0.0.1:1/none",
+        connect_args={"connect_timeout": 1},
+    )
+
+    def dead_session() -> Generator[Session]:
+        with Session(dead) as session:
+            yield session
+
+    app.dependency_overrides[get_db] = dead_session
+    yield
+    app.dependency_overrides.clear()

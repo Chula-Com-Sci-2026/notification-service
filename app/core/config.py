@@ -28,6 +28,13 @@ class Settings(BaseSettings):
     POSTGRES_PASSWORD: str = ""
     POSTGRES_DB: str = ""
 
+    # Only the consumer uses these, so a broker problem cannot stop the API.
+    RABBITMQ_HOST: str = "127.0.0.1"
+    RABBITMQ_PORT: int = 5672
+    RABBITMQ_USER: str = ""
+    RABBITMQ_PASSWORD: str = ""
+    RABBITMQ_VHOST: str = "/"
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def SQLALCHEMY_DATABASE_URI(self) -> PostgresDsn:
@@ -55,6 +62,7 @@ class Settings(BaseSettings):
     def _enforce_non_default_secrets(self) -> Self:
         self._check_default_secret("POSTGRES_PASSWORD", self.POSTGRES_PASSWORD)
         self._check_default_secret("ACCESS_TOKEN_SECRET", self.ACCESS_TOKEN_SECRET)
+        self._check_default_secret("RABBITMQ_PASSWORD", self.RABBITMQ_PASSWORD)
 
         return self
 

@@ -1,14 +1,12 @@
 import uuid
-from collections.abc import Callable, Generator
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlmodel import Session, create_engine
+from sqlmodel import Session
 
-from app.api.deps import get_db
 from app.core.config import settings
-from app.main import app
 from tests.utils.notification import create_notification
 from tests.utils.tokens import auth_headers, make_token
 
@@ -240,23 +238,6 @@ def test_invalid_notification_id_gets_422_with_a_token(client: TestClient) -> No
     response = client.patch(f"{URL}/not-a-uuid/read", headers=auth_headers(RUNNER))
     assert response.status_code == 422
     assert isinstance(response.json()["detail"], list)
-
-
-@pytest.fixture
-def database_down() -> Generator[None]:
-    """Route requests to a database nothing is listening on."""
-    dead = create_engine(
-        "postgresql+psycopg://nobody:nothing@127.0.0.1:1/none",
-        connect_args={"connect_timeout": 1},
-    )
-
-    def dead_session() -> Generator[Session]:
-        with Session(dead) as session:
-            yield session
-
-    app.dependency_overrides[get_db] = dead_session
-    yield
-    app.dependency_overrides.clear()
 
 
 @pytest.mark.usefixtures("database_down")
