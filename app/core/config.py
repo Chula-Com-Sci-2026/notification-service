@@ -16,6 +16,12 @@ class Settings(BaseSettings):
 
     PROJECT_NAME: str = "Notification Service"
     SENTRY_DSN: HttpUrl | None = None
+
+    # No default: a generated key would silently reject every Identity token.
+    ACCESS_TOKEN_SECRET: str
+    JWT_ISSUER: str = "cant-run-alone-local"
+    JWT_AUDIENCE: str = "cant-run-alone-services"
+
     POSTGRES_SERVER: str
     POSTGRES_PORT: int = 5432
     POSTGRES_USER: str
@@ -48,6 +54,7 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _enforce_non_default_secrets(self) -> Self:
         self._check_default_secret("POSTGRES_PASSWORD", self.POSTGRES_PASSWORD)
+        self._check_default_secret("ACCESS_TOKEN_SECRET", self.ACCESS_TOKEN_SECRET)
 
         return self
 
