@@ -1,13 +1,31 @@
 import uuid
 from datetime import datetime
-from typing import Any, Literal, Self
+from typing import Any, Literal, Self, get_args
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    StrictBool,
+    field_validator,
+    model_validator,
+)
 from pydantic.alias_generators import to_camel
 from sqlalchemy import DateTime, Index, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
+NotificationCategory = Literal[
+    "buddy_requests",
+    "run_invitations",
+    "run_changes",
+    "reminders",
+    "weather_alerts",
+    "attendance_prompts",
+]
+CATEGORIES: tuple[NotificationCategory, ...] = get_args(NotificationCategory)
+# FR-9.2: runners always hear about run changes and cancellations.
+LOCKED_CATEGORIES = frozenset({"run_changes"})
 EVENT_CATEGORIES = {
     "BuddyRequestSent": "buddy_requests",
     "BuddyRequestAnswered": "buddy_requests",
@@ -126,6 +144,22 @@ class Notification(SQLModel, table=True):
     read_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
 
 
+class NotificationPreference(SQLModel, table=True):
+    """A runner's choice for one category. A missing row means it is on.
+
+    Attributes:
+        recipient_id: Runner who made the choice.
+        category: The notification category.
+        enabled: Whether the runner receives this category.
+    """
+
+    __tablename__ = "notification_preferences"
+
+    recipient_id: uuid.UUID = Field(primary_key=True)
+    category: str = Field(primary_key=True, max_length=32)
+    enabled: bool
+
+
 class CamelModel(BaseModel):
     """Base for API bodies, which use camelCase like the event contracts."""
 
@@ -199,3 +233,69 @@ class NotificationsPublic(CamelModel):
     items: list[NotificationPublic]
     unread_count: int
     next_cursor: uuid.UUID | None
+
+
+class PreferencePublic(CamelModel):
+    """A runner's setting for one category.
+
+    Attributes:
+        category: The notification category.
+        enabled: Whether the runner receives this category.
+        locked: Whether the runner is unable to turn it off.
+    """
+
+    category: NotificationCategory
+    enabled: bool
+    locked: bool
+
+
+class PreferencesPublic(CamelModel):
+    """A runner's setting for every category.
+
+    Attributes:
+        items: One entry per category, in a stable order.
+    """
+
+    items: list[PreferencePublic]
+
+    @classmethod
+    def from_choices(cls, choices: dict[NotificationCategory, bool]) -> Self:
+        """Build the public view of a runner's settings.
+
+        Args:
+            choices (dict[NotificationCategory, bool]): Whether each category
+                is on.
+
+        Returns:
+            Self: The view to return to the client.
+        """
+        return cls(
+            items=[
+                PreferencePublic(
+                    category=category,
+                    enabled=enabled,
+                    locked=category in LOCKED_CATEGORIES,
+                )
+                for category, enabled in choices.items()
+            ]
+        )
+
+
+class PreferencesUpdate(CamelModel):
+    """Request to change some categories, leaving the rest as they are.
+
+    Attributes:
+        categories: The categories to change and whether each should be on.
+    """
+
+    categories: dict[NotificationCategory, StrictBool] = Field(min_length=1)
+
+    @field_validator("categories")
+    @classmethod
+    def _locked_categories_stay_on(
+        cls, categories: dict[NotificationCategory, bool]
+    ) -> dict[NotificationCategory, bool]:
+        for category, enabled in categories.items():
+            if category in LOCKED_CATEGORIES and not enabled:
+                raise ValueError(f"{category} cannot be turned off")
+        return categories

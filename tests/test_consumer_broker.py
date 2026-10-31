@@ -156,6 +156,31 @@ def test_unbound_routing_key_is_reported_as_not_routed(broker: Broker) -> None:
     assert broker.publish(make_event(), "SomethingElse") is False
 
 
+def test_a_category_turned_off_in_the_api_stops_real_events(
+    client: TestClient, broker: Broker, consumer: ConsumerProcess
+) -> None:
+    runner = uuid.uuid4()
+    url = f"{URL}/preferences"
+    off = {"categories": {"buddy_requests": False}}
+    assert client.patch(url, headers=auth_headers(runner), json=off).status_code == 200
+
+    muted = make_event(recipient_id=runner)
+    assert broker.publish(muted, "BuddyRequestSent") is True
+    wait_until(lambda: f"Muted event {muted['eventId']}" in consumer.logs())
+    assert inbox(client, runner) == []
+
+    on = {"categories": {"buddy_requests": True}}
+    assert client.patch(url, headers=auth_headers(runner), json=on).status_code == 200
+
+    later = make_event(recipient_id=runner)
+    broker.publish(later, "BuddyRequestSent")
+    wait_for_inbox(client, runner)
+    items = inbox(client, runner)
+    assert [item["data"]["requestId"] for item in items] == [
+        later["payload"]["requestId"]
+    ]
+
+
 def test_events_wait_in_the_queue_while_the_consumer_is_down(
     client: TestClient, broker: Broker, tmp_path: Path
 ) -> None:

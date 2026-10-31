@@ -1,13 +1,96 @@
 import uuid
+from typing import Literal
 
 from sqlalchemy import DateTime, Uuid, func, literal, tuple_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlmodel import Session, col, select
 
-from app.models import BuddyEvent, Notification
+from app.models import (
+    CATEGORIES,
+    LOCKED_CATEGORIES,
+    BuddyEvent,
+    Notification,
+    NotificationCategory,
+    NotificationPreference,
+)
 
 
-def create_notification_from_event(*, session: Session, event: BuddyEvent) -> bool:
+def category_enabled(
+    *, session: Session, recipient_id: uuid.UUID, category: str
+) -> bool:
+    """Report whether a runner receives a category.
+
+    Args:
+        session (Session): Database session.
+        recipient_id (uuid.UUID): The runner.
+        category (str): The notification category.
+
+    Returns:
+        bool: True unless the runner turned it off. A locked category is
+        always True, whatever is stored.
+    """
+    if category in LOCKED_CATEGORIES:
+        return True
+    preference = session.get(NotificationPreference, (recipient_id, category))
+    return preference is None or preference.enabled
+
+
+def list_preferences(
+    *, session: Session, recipient_id: uuid.UUID
+) -> dict[NotificationCategory, bool]:
+    """Return whether a runner receives each category.
+
+    Args:
+        session (Session): Database session.
+        recipient_id (uuid.UUID): The runner.
+
+    Returns:
+        dict[NotificationCategory, bool]: Every category, in a stable order.
+    """
+    rows = session.exec(
+        select(NotificationPreference).where(
+            col(NotificationPreference.recipient_id) == recipient_id
+        )
+    ).all()
+    choices = {row.category: row.enabled for row in rows}
+    return {
+        category: category in LOCKED_CATEGORIES or choices.get(category, True)
+        for category in CATEGORIES
+    }
+
+
+def update_preferences(
+    *,
+    session: Session,
+    recipient_id: uuid.UUID,
+    choices: dict[NotificationCategory, bool],
+) -> None:
+    """Save a runner's choices in one transaction, leaving the rest alone.
+
+    Args:
+        session (Session): Database session.
+        recipient_id (uuid.UUID): The runner.
+        choices (dict[NotificationCategory, bool]): The categories to change.
+    """
+    rows = [
+        {"recipient_id": recipient_id, "category": category, "enabled": enabled}
+        for category, enabled in choices.items()
+        if category not in LOCKED_CATEGORIES
+    ]
+    if rows:
+        statement = insert(NotificationPreference).values(rows)
+        session.exec(
+            statement.on_conflict_do_update(
+                index_elements=["recipient_id", "category"],
+                set_={"enabled": statement.excluded.enabled},
+            )
+        )
+        session.commit()
+
+
+def create_notification_from_event(
+    *, session: Session, event: BuddyEvent
+) -> Literal["stored", "duplicate", "muted"]:
     """Store the notification an event produces, once per event and runner.
 
     Args:
@@ -15,14 +98,21 @@ def create_notification_from_event(*, session: Session, event: BuddyEvent) -> bo
         event (BuddyEvent): The validated event.
 
     Returns:
-        bool: True if stored, False if a redelivery already stored it.
+        Literal["stored", "duplicate", "muted"]: "stored" if it was saved,
+        "duplicate" if a redelivery already saved it, and "muted" if the
+        runner turned this category off, so nothing was saved.
     """
+    recipient_id = event.notification_recipient_id
+    if not category_enabled(
+        session=session, recipient_id=recipient_id, category=event.category
+    ):
+        return "muted"
     stored = session.exec(
         insert(Notification)
         .values(
             id=uuid.uuid4(),
             event_id=event.event_id,
-            recipient_id=event.notification_recipient_id,
+            recipient_id=recipient_id,
             event_type=event.event_type,
             category=event.category,
             payload=event.payload.model_dump(mode="json", by_alias=True),
@@ -32,7 +122,7 @@ def create_notification_from_event(*, session: Session, event: BuddyEvent) -> bo
         .returning(col(Notification.id))
     ).first()
     session.commit()
-    return stored is not None
+    return "stored" if stored is not None else "duplicate"
 
 
 def list_notifications(

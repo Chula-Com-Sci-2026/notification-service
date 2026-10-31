@@ -26,6 +26,11 @@ DEAD_EXCHANGE = "cra.dead"
 QUEUE = "notifications.events"
 DEAD_QUEUE = "notifications.dead"
 RETRY_SECONDS = 3
+OUTCOME_LABELS = {
+    "stored": "Stored",
+    "duplicate": "Ignored duplicate",
+    "muted": "Muted",
+}
 # Compose's healthcheck reads this, because the consumer serves no HTTP.
 READY_FILE = Path(tempfile.gettempdir()) / "notification-consumer-ready"
 
@@ -92,7 +97,7 @@ def handle_delivery(channel: Any, method: Any, _properties: Any, body: bytes) ->
             return
         try:
             with Session(engine) as session:
-                stored = crud.create_notification_from_event(
+                outcome = crud.create_notification_from_event(
                     session=session, event=event
                 )
         except SQLAlchemyError as error:
@@ -101,9 +106,7 @@ def handle_delivery(channel: Any, method: Any, _properties: Any, body: bytes) ->
             )
             raise
         channel.basic_ack(method.delivery_tag)
-        logger.info(
-            "%s event %s", "Stored" if stored else "Ignored duplicate", event.event_id
-        )
+        logger.info("%s event %s", OUTCOME_LABELS[outcome], event.event_id)
     finally:
         correlation_id.reset(token)
 

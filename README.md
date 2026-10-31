@@ -2,7 +2,7 @@
 
 In-app notifications for Can't Run Alone, built on a FastAPI service template.
 
-**Status:** buddy events become notifications and runners can read them. Preferences and run events are not built yet.
+**Status:** buddy events become notifications, runners can read them, and runners can turn categories off. Run events are not built yet, so `buddy_requests` is the only category that receives anything today.
 
 It runs as two processes from one image: `api` serves the inbox and `consumer` stores events. Either keeps working while the other's dependency is down.
 
@@ -13,10 +13,18 @@ It runs as two processes from one image: `api` serves the inbox and `consumer` s
 | `GET` | `/up` | Liveness, no token needed |
 | `GET` | `/api/v1/notifications` | The caller's inbox, newest first. Optional `limit` (1-100, default 50) and `before` (a `nextCursor` value) |
 | `PATCH` | `/api/v1/notifications/{id}/read` | Mark as read. Repeat calls keep the first time |
+| `GET` | `/api/v1/notifications/preferences` | The caller's setting for every category |
+| `PATCH` | `/api/v1/notifications/preferences` | Change some categories, for example `{"categories": {"reminders": false}}` |
 
 Every `/api/v1` call needs an `Authorization: Bearer <token>` header carrying an Identity access token. A bad token gets 401, and another runner's notification ID gets the same 404 as a missing one.
 
 Errors use `{"code", "message"}`, except FastAPI's native 422.
+
+## Preferences
+
+The categories are `buddy_requests`, `run_invitations`, `run_changes`, `reminders`, `weather_alerts` and `attendance_prompts`. Every category starts on. `run_changes` is locked on (FR-9.2), so turning it off gets a 422.
+
+An event in a category that is off is acknowledged and not stored. Turning the category back on applies to later events only, and turning it off leaves existing notifications in the inbox.
 
 ## Publishing events
 

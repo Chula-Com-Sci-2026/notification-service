@@ -19,6 +19,7 @@ CONTRACT: dict[str, Any] = json.loads(
 )
 LIST = "/api/v1/notifications"
 READ = "/api/v1/notifications/{notification_id}/read"
+PREFERENCES = "/api/v1/notifications/preferences"
 
 
 def assert_documented(
@@ -78,9 +79,28 @@ def test_read_responses_fit_the_contract(client: TestClient, db: Session) -> Non
     assert_documented(invalid, READ, "patch", 422)
 
 
+def test_preference_responses_fit_the_contract(client: TestClient) -> None:
+    headers = auth_headers(uuid.uuid4())
+    body = {"categories": {"reminders": False}}
+    assert_documented(client.get(PREFERENCES, headers=headers), PREFERENCES, "get", 200)
+    saved = client.patch(PREFERENCES, headers=headers, json=body)
+    assert_documented(saved, PREFERENCES, "patch", 200)
+    assert_documented(client.get(PREFERENCES), PREFERENCES, "get", 401)
+    assert_documented(client.patch(PREFERENCES, json=body), PREFERENCES, "patch", 401)
+    locked = client.patch(
+        PREFERENCES, headers=headers, json={"categories": {"run_changes": False}}
+    )
+    assert_documented(locked, PREFERENCES, "patch", 422)
+
+
 @pytest.mark.usefixtures("database_down")
 def test_outage_responses_fit_the_contract(client: TestClient) -> None:
     headers = auth_headers(uuid.uuid4())
     assert_documented(client.get(LIST, headers=headers), LIST, "get", 503)
     url = f"{LIST}/{uuid.uuid4()}/read"
     assert_documented(client.patch(url, headers=headers), READ, "patch", 503)
+    assert_documented(client.get(PREFERENCES, headers=headers), PREFERENCES, "get", 503)
+    saved = client.patch(
+        PREFERENCES, headers=headers, json={"categories": {"reminders": False}}
+    )
+    assert_documented(saved, PREFERENCES, "patch", 503)

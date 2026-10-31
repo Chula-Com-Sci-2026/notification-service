@@ -13,6 +13,14 @@ from tests.utils.tokens import auth_headers, make_token
 URL = f"{settings.API_V1_STR}/notifications"
 RUNNER = uuid.UUID("00000000-0000-4000-8000-000000000001")
 PAST = datetime(2020, 1, 1, tzinfo=UTC)
+# Every protected endpoint, so a new one cannot miss the rejection tests (NFR-5.6).
+ENDPOINTS = {
+    "list": ("GET", URL),
+    "read": ("PATCH", f"{URL}/{uuid.uuid4()}/read"),
+    "get preferences": ("GET", f"{URL}/preferences"),
+    "update preferences": ("PATCH", f"{URL}/preferences"),
+}
+VALID_BODY = {"categories": {"reminders": False}}
 
 
 def bearer(token: str) -> dict[str, str]:
@@ -45,11 +53,7 @@ REJECTED_CREDENTIALS: dict[str, Callable[[], dict[str, str]]] = {
 }
 
 
-@pytest.mark.parametrize(
-    ("method", "path"),
-    [("GET", URL), ("PATCH", f"{URL}/{uuid.uuid4()}/read")],
-    ids=["list", "read"],
-)
+@pytest.mark.parametrize(("method", "path"), ENDPOINTS.values(), ids=ENDPOINTS.keys())
 @pytest.mark.parametrize(
     "credentials", REJECTED_CREDENTIALS.values(), ids=REJECTED_CREDENTIALS.keys()
 )
@@ -59,7 +63,7 @@ def test_rejected_credentials_get_401(
     path: str,
     credentials: Callable[[], dict[str, str]],
 ) -> None:
-    response = client.request(method, path, headers=credentials())
+    response = client.request(method, path, headers=credentials(), json=VALID_BODY)
     assert response.status_code == 401
     assert response.headers["www-authenticate"] == "Bearer"
     assert response.json() == {
@@ -241,15 +245,13 @@ def test_invalid_notification_id_gets_422_with_a_token(client: TestClient) -> No
 
 
 @pytest.mark.usefixtures("database_down")
-@pytest.mark.parametrize(
-    ("method", "path"),
-    [("GET", URL), ("PATCH", f"{URL}/{uuid.uuid4()}/read")],
-    ids=["list", "read"],
-)
+@pytest.mark.parametrize(("method", "path"), ENDPOINTS.values(), ids=ENDPOINTS.keys())
 def test_database_outage_gets_503_without_leaking_details(
     client: TestClient, method: str, path: str
 ) -> None:
-    response = client.request(method, path, headers=auth_headers(RUNNER))
+    response = client.request(
+        method, path, headers=auth_headers(RUNNER), json=VALID_BODY
+    )
     assert response.status_code == 503
     assert response.json() == {
         "code": "SERVICE_UNAVAILABLE",
