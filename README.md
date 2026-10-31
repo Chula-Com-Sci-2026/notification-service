@@ -42,6 +42,8 @@ Every log line has `correlation_id=<uuid>`. The consumer uses the event's `corre
 
 The interfaces this service must honor live in [running-buddy-contracts](https://github.com/Chula-Com-Sci-2026/running-buddy-contracts): `notification.openapi.json`, `events.md` and `buddy-events.schema.json`. `tests/contracts/` holds copies that the tests check the service against.
 
+The served API must exactly match `tests/contracts/notification.openapi.json`, so any API change fails the tests until you save the running service's `http://127.0.0.1:8010/openapi.json` over that file. Send the same change to the contracts repo.
+
 Design decisions are in [running-buddy-ADRs](https://github.com/Chula-Com-Sci-2026/running-buddy-ADRs), mainly ADR-0020, ADR-0021 and ADR-0022.
 
 This service runs Python 3.14 because the template requires it, while ADR-0020 names 3.13. Compatibility depends on the contracts, not the Python version.
